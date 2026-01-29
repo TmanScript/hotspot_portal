@@ -1,5 +1,5 @@
-
 {
+  "homepage": "https://TmanScript.github.io/hotspot_portal/",
   "name": "onetel-hotspot-portal",
   "private": true,
   "version": "1.0.0",
@@ -7,7 +7,9 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "predeploy": "npm run build",
+    "deploy": "gh-pages -d dist"
   },
   "dependencies": {
     "crypto-js": "^4.2.0",
