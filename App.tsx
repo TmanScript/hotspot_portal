@@ -18,6 +18,7 @@ import {
   ShieldAlert,
   Activity,
   History,
+  RefreshCw,
 } from "lucide-react";
 import CryptoJS from "crypto-js";
 import Input from "./components/Input";
@@ -44,7 +45,7 @@ type Step =
 
 interface BridgeStatus {
   name: string;
-  status: "checking" | "ok" | "blocked";
+  status: "checking" | "ok" | "blocked" | "intercepted";
   cors: boolean;
 }
 
@@ -86,7 +87,7 @@ const App: React.FC = () => {
   });
 
   const runDiagnostics = useCallback(async () => {
-    const tests = BRIDGES.map(async (bridge, idx) => {
+    const tests = BRIDGES.map(async (bridge) => {
       try {
         const target = "https://device.onetel.co.za/favicon.ico";
         const url = bridge.proxy
@@ -96,12 +97,21 @@ const App: React.FC = () => {
         const controller = new AbortController();
         const timeoutId = setTimeout(() => controller.abort(), 5000);
 
-        // Full CORS check
         const res = await fetch(url, {
           signal: controller.signal,
           cache: "no-cache",
         });
         clearTimeout(timeoutId);
+
+        const cType = res.headers.get("content-type") || "";
+        if (cType.includes("text/html")) {
+          return {
+            name: bridge.name,
+            status: "intercepted" as const,
+            cors: false,
+          };
+        }
+
         return {
           name: bridge.name,
           status: "ok" as const,
@@ -118,7 +128,7 @@ const App: React.FC = () => {
 
   useEffect(() => {
     runDiagnostics();
-    const interval = setInterval(runDiagnostics, 30000);
+    const interval = setInterval(runDiagnostics, 60000);
     return () => clearInterval(interval);
   }, []);
 
@@ -199,6 +209,7 @@ const App: React.FC = () => {
     } catch (err: any) {
       setErrorMessage(err.message);
       setBridgeHistory([...lastBridgeLogs]);
+      runDiagnostics();
     } finally {
       setIsSubmitting(false);
     }
@@ -242,17 +253,23 @@ const App: React.FC = () => {
       if (response.ok) {
         const token = data.token || data.key || data.token_key;
         setAuthToken(token);
-        const usageRes = await getUsage(token);
-        const usage: UsageResponse = await parseResponse(usageRes);
 
-        if (usage.checks && usage.checks.length > 0) {
-          const check = usage.checks[0];
-          const remainingBytes = check.value - check.result;
-          const remainingMB = (remainingBytes / (1024 * 1024)).toFixed(2);
-          const hasData = remainingBytes > 1024 * 50;
-          setUsageData({ remainingMB, hasData });
-          setStep("USAGE_INFO");
-        } else {
+        try {
+          const usageRes = await getUsage(token);
+          const usage: UsageResponse = await parseResponse(usageRes);
+
+          if (usage.checks && usage.checks.length > 0) {
+            const check = usage.checks[0];
+            const remainingBytes = check.value - check.result;
+            const remainingMB = (remainingBytes / (1024 * 1024)).toFixed(2);
+            const hasData = remainingBytes > 1024 * 50;
+            setUsageData({ remainingMB, hasData });
+            setStep("USAGE_INFO");
+          } else {
+            setStep("SUCCESS");
+          }
+        } catch (usageErr) {
+          // If usage check fails but login worked, assume success and let them connect
           setStep("SUCCESS");
         }
       } else {
@@ -311,21 +328,21 @@ const App: React.FC = () => {
             </button>
             <div className="text-center mb-10">
               <h2 className="text-3xl font-black text-gray-900 mb-2">
-                Select a Data Plan
+                Data Plans
               </h2>
             </div>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
               <button
-                onClick={() => alert("PayFast integration...")}
-                className="bg-white border-2 border-pink-50 p-6 rounded-3xl text-left hover:border-pink-500 hover:shadow-xl transition-all active:scale-95"
+                onClick={() => alert("PayFast redirected...")}
+                className="bg-white border-2 border-pink-50 p-6 rounded-3xl text-left hover:border-pink-500 hover:shadow-xl transition-all"
               >
                 <Tag className="w-6 h-6 text-pink-500 mb-4" />
                 <h4 className="text-2xl font-black text-gray-900 mb-1">1GB</h4>
                 <p className="text-pink-500 font-black">R 5</p>
               </button>
               <button
-                onClick={() => alert("PayFast integration...")}
-                className="bg-pink-500 border-2 border-pink-500 p-6 rounded-3xl text-left hover:shadow-pink-200 hover:shadow-2xl transition-all active:scale-95 text-white"
+                onClick={() => alert("PayFast redirected...")}
+                className="bg-pink-500 border-2 border-pink-500 p-6 rounded-3xl text-left hover:shadow-pink-200 hover:shadow-2xl transition-all text-white"
               >
                 <h4 className="text-2xl font-black mb-1">10GB</h4>
                 <p className="font-black text-pink-100">R 50</p>
@@ -344,10 +361,13 @@ const App: React.FC = () => {
               Join Onetel
             </h2>
             <div className="relative z-10 space-y-4">
-              {/* Diagnostic Mini-View */}
               <div className="bg-black/10 backdrop-blur-md rounded-2xl p-4 border border-white/10">
-                <p className="text-[10px] font-black uppercase tracking-widest mb-3 text-pink-100">
-                  Connection Bridges
+                <p className="text-[10px] font-black uppercase tracking-widest mb-3 text-pink-100 flex items-center justify-between">
+                  Live Status{" "}
+                  <RefreshCw
+                    onClick={runDiagnostics}
+                    className="w-2.5 h-2.5 cursor-pointer hover:rotate-180 transition-transform"
+                  />
                 </p>
                 <div className="space-y-2">
                   {diagnostics.map((d) => (
@@ -357,15 +377,17 @@ const App: React.FC = () => {
                     >
                       <span className="flex items-center gap-2">
                         <div
-                          className={`w-2 h-2 rounded-full ${d.status === "ok" ? "bg-green-400" : "bg-red-400"}`}
+                          className={`w-2 h-2 rounded-full ${d.status === "ok" ? "bg-green-400" : d.status === "intercepted" ? "bg-orange-400 animate-pulse" : "bg-red-400"}`}
                         />
                         {d.name}
                       </span>
-                      {d.cors ? (
-                        <ShieldCheck className="w-3 h-3 text-green-400" />
-                      ) : (
-                        <ShieldAlert className="w-3 h-3 text-red-300" />
-                      )}
+                      <span className="text-[8px] opacity-70">
+                        {d.status === "ok"
+                          ? "READY"
+                          : d.status === "intercepted"
+                            ? "TRAPPED"
+                            : "BLOCKED"}
+                      </span>
                     </div>
                   ))}
                 </div>
@@ -386,7 +408,7 @@ const App: React.FC = () => {
                   name="first_name"
                   value={formData.first_name}
                   onChange={handleInputChange}
-                  placeholder="John"
+                  placeholder="First Name"
                   required
                 />
                 <Input
@@ -394,7 +416,7 @@ const App: React.FC = () => {
                   name="last_name"
                   value={formData.last_name}
                   onChange={handleInputChange}
-                  placeholder="Doe"
+                  placeholder="Last Name"
                   required
                 />
               </div>
@@ -409,12 +431,12 @@ const App: React.FC = () => {
                 required
               />
               <Input
-                label="Email Address"
+                label="Email"
                 name="email"
                 type="email"
                 value={formData.email}
                 onChange={handleInputChange}
-                placeholder="john@example.com"
+                placeholder="email@address.com"
                 icon={<Mail className="w-4 h-4" />}
                 required
               />
@@ -442,7 +464,7 @@ const App: React.FC = () => {
               </div>
               {errorMessage && (
                 <div className="text-red-600 text-[11px] font-bold bg-red-50 p-3 rounded-xl border border-red-100 flex gap-2 items-start">
-                  <XCircle className="w-4 h-4 mt-0.5" />{" "}
+                  <XCircle className="w-4 h-4 mt-0.5 shrink-0" />{" "}
                   <span>{errorMessage}</span>
                 </div>
               )}
@@ -454,7 +476,7 @@ const App: React.FC = () => {
                 {isSubmitting ? (
                   <Loader2 className="w-5 h-5 animate-spin" />
                 ) : (
-                  "Register Account"
+                  "Create Account"
                 )}
               </button>
             </form>
@@ -470,10 +492,13 @@ const App: React.FC = () => {
             <h2 className="text-2xl font-bold text-gray-900">
               Verify Identity
             </h2>
+            <p className="text-sm text-gray-500 mt-2">
+              Check your phone for a code
+            </p>
           </div>
           <form onSubmit={handleOtpSubmit} className="space-y-6">
             <Input
-              label="Verification Code"
+              label="OTP Code"
               name="otp"
               value={otpCode}
               onChange={(e) => setOtpCode(e.target.value)}
@@ -489,7 +514,7 @@ const App: React.FC = () => {
               {isSubmitting ? (
                 <Loader2 className="w-5 h-5 animate-spin" />
               ) : (
-                "Verify & Continue"
+                "Verify Code"
               )}
             </button>
           </form>
@@ -499,25 +524,24 @@ const App: React.FC = () => {
 
     if (step === "SUCCESS" || (step === "USAGE_INFO" && usageData?.hasData)) {
       return (
-        <div className="max-w-md w-full bg-white rounded-3xl shadow-2xl p-8 text-center border-t-8 border-pink-500">
+        <div className="max-w-md w-full bg-white rounded-3xl shadow-2xl p-10 text-center border-t-8 border-pink-500 animate-in fade-in zoom-in">
           <div className="mb-6 flex justify-center">
-            <div className="w-20 h-20 bg-green-100 rounded-full flex items-center justify-center">
-              <CheckCircle2 className="w-12 h-12 text-green-500" />
+            <div className="w-24 h-24 bg-green-100 rounded-full flex items-center justify-center">
+              <CheckCircle2 className="w-14 h-14 text-green-500" />
             </div>
           </div>
-          <h2 className="text-3xl font-bold text-gray-900 mb-2">
-            Authenticated!
-          </h2>
+          <h2 className="text-3xl font-black text-gray-900 mb-2">Welcome!</h2>
+          <p className="text-gray-500 mb-6">Your session is ready.</p>
           {usageData && (
-            <div className="mb-6 p-4 bg-pink-50 rounded-2xl border border-pink-100 font-bold text-pink-600">
-              {usageData.remainingMB} MB Remaining
+            <div className="mb-8 p-5 bg-pink-50 rounded-2xl border border-pink-100 font-bold text-pink-600 text-xl">
+              {usageData.remainingMB} MB Available
             </div>
           )}
           <button
             onClick={connectToRouter}
-            className="w-full py-4 bg-pink-500 text-white font-bold rounded-2xl shadow-lg active:scale-95 flex items-center justify-center gap-2"
+            className="w-full py-5 bg-pink-500 text-white font-black rounded-2xl shadow-xl active:scale-95 flex items-center justify-center gap-2 text-lg"
           >
-            Activate Internet Now <Zap className="w-5 h-5" />
+            Connect Now <Zap className="w-6 h-6" />
           </button>
         </div>
       );
@@ -525,18 +549,17 @@ const App: React.FC = () => {
 
     if (step === "USAGE_INFO" && !usageData?.hasData) {
       return (
-        <div className="max-w-md w-full bg-white rounded-3xl shadow-2xl p-8 text-center border-t-8 border-orange-500">
-          <div className="mb-6 flex justify-center">
-            <Database className="w-16 h-16 text-orange-500" />
+        <div className="max-w-md w-full bg-white rounded-3xl shadow-2xl p-10 text-center border-t-8 border-orange-500">
+          <div className="mb-6 flex justify-center text-orange-500">
+            <Database className="w-16 h-16" />
           </div>
-          <h2 className="text-3xl font-bold text-gray-900 mb-2">
-            Data Depleted
-          </h2>
+          <h2 className="text-3xl font-black text-gray-900 mb-2">No Data</h2>
+          <p className="text-gray-500 mb-8">You need a bundle to connect.</p>
           <button
             onClick={() => setStep("BUY_DATA")}
-            className="w-full py-4 bg-orange-500 text-white font-bold rounded-2xl shadow-lg flex items-center justify-center gap-2 active:scale-95"
+            className="w-full py-5 bg-orange-500 text-white font-black rounded-2xl shadow-xl flex items-center justify-center gap-2 active:scale-95 text-lg"
           >
-            Buy Data Bundle <ShoppingCart className="w-5 h-5" />
+            Buy Data <ShoppingCart className="w-6 h-6" />
           </button>
         </div>
       );
@@ -546,14 +569,16 @@ const App: React.FC = () => {
       <div className="max-w-4xl w-full grid grid-cols-1 lg:grid-cols-2 bg-white rounded-[2.5rem] shadow-2xl overflow-hidden border border-pink-100">
         <div className="hidden lg:flex flex-col justify-between p-12 bg-pink-500 text-white relative overflow-hidden">
           <h2 className="text-4xl font-bold leading-tight mb-6">
-            High Speed WiFi
+            Fast WiFi
+            <br />
+            Everywhere
           </h2>
 
           <div className="relative z-10 space-y-4">
             <div className="bg-black/10 backdrop-blur-md rounded-2xl p-5 border border-white/10 shadow-inner">
               <div className="flex items-center justify-between mb-4">
                 <p className="text-[10px] font-black uppercase tracking-widest text-pink-100 flex items-center gap-2">
-                  <Activity className="w-3 h-3" /> System Health
+                  <Activity className="w-3 h-3" /> Connection Monitor
                 </p>
                 {bridgeHistory.length > 0 && (
                   <button
@@ -561,7 +586,7 @@ const App: React.FC = () => {
                     className="text-[9px] font-black uppercase tracking-widest text-white underline flex items-center gap-1"
                   >
                     <History className="w-3 h-3" />{" "}
-                    {showLogs ? "Hide Logs" : "View Errors"}
+                    {showLogs ? "Diagnostics" : "Log"}
                   </button>
                 )}
               </div>
@@ -573,11 +598,13 @@ const App: React.FC = () => {
                       key={i}
                       className="text-[9px] bg-red-900/40 p-2 rounded-lg border border-red-500/30 font-mono"
                     >
-                      <div className="text-red-200 font-bold mb-1 flex justify-between">
+                      <div className="text-red-200 font-bold flex justify-between">
                         <span>{log.bridge}</span>
-                        <span className="opacity-50">{log.timestamp}</span>
+                        <span className="opacity-50 text-[7px]">
+                          {log.timestamp}
+                        </span>
                       </div>
-                      <div className="text-white/80">{log.error}</div>
+                      <div className="text-white/80 mt-1">{log.error}</div>
                     </div>
                   ))}
                 </div>
@@ -590,7 +617,7 @@ const App: React.FC = () => {
                     >
                       <span className="flex items-center gap-3">
                         <div
-                          className={`w-2.5 h-2.5 rounded-full ${d.status === "ok" ? "bg-green-400 shadow-[0_0_8px_rgba(74,222,128,0.5)]" : "bg-red-400"}`}
+                          className={`w-2.5 h-2.5 rounded-full ${d.status === "ok" ? "bg-green-400" : d.status === "intercepted" ? "bg-orange-400 animate-pulse" : "bg-red-400"}`}
                         />
                         {d.name}
                       </span>
@@ -598,7 +625,11 @@ const App: React.FC = () => {
                         <span
                           className={`text-[8px] uppercase tracking-tighter ${d.status === "ok" ? "text-green-200" : "text-red-200"}`}
                         >
-                          {d.status === "ok" ? "Online" : "Restricted"}
+                          {d.status === "ok"
+                            ? "Open"
+                            : d.status === "intercepted"
+                              ? "Trapped"
+                              : "Blocked"}
                         </span>
                         {d.cors ? (
                           <ShieldCheck className="w-3.5 h-3.5 text-green-300" />
@@ -615,9 +646,7 @@ const App: React.FC = () => {
         </div>
 
         <div className="p-8 sm:p-12 flex flex-col justify-center bg-white">
-          <h3 className="text-2xl font-bold mb-8 text-gray-900">
-            Login to Onetel
-          </h3>
+          <h3 className="text-2xl font-bold mb-8 text-gray-900">Sign In</h3>
           <form onSubmit={handleLoginSubmit} className="space-y-4">
             <Input
               label="Phone Number"
@@ -642,20 +671,13 @@ const App: React.FC = () => {
 
             {errorMessage && (
               <div className="text-red-600 text-[11px] font-bold bg-red-50 p-3 rounded-xl border border-red-100 flex gap-2 items-start">
-                <XCircle className="w-4 h-4 mt-0.5" />
+                <XCircle className="w-4 h-4 mt-0.5 shrink-0" />
                 <div className="flex-1">
                   <span>{errorMessage}</span>
-                  {bridgeHistory.length > 0 && !showLogs && (
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setShowLogs(true);
-                        setStep("LOGIN");
-                      }}
-                      className="block mt-1 underline text-red-400"
-                    >
-                      View technical details
-                    </button>
+                  {errorMessage.includes("trapped") && (
+                    <p className="mt-1 text-red-400 font-medium">
+                      Try moving closer to the router or refreshing.
+                    </p>
                   )}
                 </div>
               </div>
@@ -677,7 +699,7 @@ const App: React.FC = () => {
             onClick={() => setStep("REGISTRATION")}
             className="w-full mt-6 text-pink-500 font-bold text-xs uppercase tracking-widest hover:underline"
           >
-            Create New Account
+            New Account?
           </button>
         </div>
       </div>
@@ -708,8 +730,7 @@ const App: React.FC = () => {
             </button>
           </div>
           <p className="text-[10px] text-gray-500 mb-3 font-medium">
-            Add these to your <b>uamallowed</b> list in OpenWISP to fix
-            connectivity:
+            Add these to your <b>uamallowed</b> list to avoid login failures:
           </p>
           <div className="bg-gray-50 p-3 rounded-xl border border-gray-100 flex gap-2 items-center">
             <code className="text-[9px] font-mono text-gray-500 truncate flex-1 leading-none">
@@ -727,7 +748,7 @@ const App: React.FC = () => {
 
       <p className="mt-8 text-center text-gray-400 text-[10px] font-black uppercase tracking-widest flex items-center gap-2">
         <div className="w-1.5 h-1.5 bg-green-500 rounded-full animate-pulse"></div>
-        Onetel Network • Secure Gateway v4.6
+        Onetel Network • Resilience Core v4.7
       </p>
     </div>
   );
