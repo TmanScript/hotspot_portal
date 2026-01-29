@@ -2,43 +2,55 @@ import { RegistrationPayload, LoginPayload } from "../types";
 import { API_ENDPOINT } from "../constants";
 
 /**
- * RESILIENT BRIDGE SYSTEM
- * We rotate through different strategies to reach the backend.
+ * BRIDGE STRATEGIES
+ * We use multiple proxies with different characteristics to ensure
+ * that we can bypass both router blocks and CORS restrictions.
  */
-const STRATEGIES = [
-  { name: "Direct", proxy: "", type: "direct" },
-  { name: "Bridge Alpha", proxy: "https://corsproxy.io/?", type: "standard" },
+export const BRIDGES = [
+  { name: "Direct Path", proxy: "", type: "direct" },
+  { name: "Cloud Bridge A", proxy: "https://corsproxy.io/?", type: "standard" },
   {
-    name: "Bridge Beta",
+    name: "Cloud Bridge B",
     proxy: "https://api.codetabs.com/v1/proxy/?quest=",
     type: "standard",
   },
   {
-    name: "Bridge Gamma",
+    name: "Backup Bridge",
     proxy: "https://api.allorigins.win/raw?url=",
     type: "allorigins",
   },
 ];
 
+export interface BridgeError {
+  bridge: string;
+  error: string;
+  timestamp: string;
+}
+
+// Global log to track connection attempts for debugging in the UI
+export let lastBridgeLogs: BridgeError[] = [];
+
 async function fetchWithResilience(
   targetUrl: string,
   options: RequestInit,
 ): Promise<Response> {
+  lastBridgeLogs = [];
   let lastError: any;
 
-  for (const strategy of STRATEGIES) {
+  for (const bridge of BRIDGES) {
     try {
-      let fullUrl = strategy.proxy
-        ? `${strategy.proxy}${encodeURIComponent(targetUrl)}`
-        : targetUrl;
+      const isDirect = bridge.type === "direct";
+      const fullUrl = isDirect
+        ? targetUrl
+        : `${bridge.proxy}${encodeURIComponent(targetUrl)}`;
 
-      // AllOrigins has issues with POST on the /raw endpoint, so we skip it for non-GET
-      if (strategy.type === "allorigins" && options.method !== "GET") continue;
+      // AllOrigins /raw only reliably supports GET
+      if (bridge.type === "allorigins" && options.method !== "GET") continue;
 
       const controller = new AbortController();
       const timeoutId = setTimeout(
         () => controller.abort(),
-        strategy.proxy ? 8000 : 3000,
+        isDirect ? 4000 : 10000,
       );
 
       const response = await fetch(fullUrl, {
@@ -50,19 +62,27 @@ async function fetchWithResilience(
 
       clearTimeout(timeoutId);
 
-      // We accept any valid HTTP response from the target server (even 4xx/5xx)
-      // as it means the bridge successfully reached the Onetel API.
+      // If we got ANY response (even 401 or 404), the bridge is working.
+      // We only move to the next bridge if we get a NETWORK error (Failed to fetch).
       if (response.status > 0) {
         return response;
       }
+
+      throw new Error(`Status ${response.status}`);
     } catch (err: any) {
-      console.warn(`Strategy [${strategy.name}] Failed:`, err.message);
+      const errorMsg = err.name === "AbortError" ? "Timed out" : err.message;
+      console.warn(`Bridge [${bridge.name}] failed:`, errorMsg);
+      lastBridgeLogs.push({
+        bridge: bridge.name,
+        error: errorMsg,
+        timestamp: new Date().toLocaleTimeString(),
+      });
       lastError = err;
     }
   }
 
   throw new Error(
-    "Network path blocked. Please check your Walled Garden settings and ensure 'device.onetel.co.za' is allowed.",
+    "Critical: No available connection path. The hotspot router is blocking all API bridges.",
   );
 }
 
