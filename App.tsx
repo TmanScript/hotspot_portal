@@ -4,9 +4,7 @@ import {
   Mail,
   Phone,
   Lock,
-  ChevronRight,
   CheckCircle2,
-  Wifi,
   Zap,
   Loader2,
   Database,
@@ -15,8 +13,6 @@ import {
   Info,
   XCircle,
   ArrowLeft,
-  KeyRound,
-  TrendingUp,
   Tag,
 } from "lucide-react";
 import CryptoJS from "crypto-js";
@@ -43,6 +39,7 @@ interface DomainStatus {
   url: string;
   label: string;
   status: "checking" | "ok" | "blocked";
+  cors: boolean;
 }
 
 const App: React.FC = () => {
@@ -70,27 +67,24 @@ const App: React.FC = () => {
   const [errorMessage, setErrorMessage] = useState("");
   const [showHelper, setShowHelper] = useState(true);
 
-  // Diagnostics check actual connectivity through the proxies to known reachable endpoints
   const [diagnostics, setDiagnostics] = useState<DomainStatus[]>([
     {
       url: "https://device.onetel.co.za/favicon.ico",
       label: "Auth Server",
       status: "checking",
-    },
-    {
-      url: "https://api.allorigins.win/raw?url=https://google.com",
-      label: "AllOrigins",
-      status: "checking",
+      cors: false,
     },
     {
       url: "https://corsproxy.io/?https://google.com",
-      label: "CorsProxy",
+      label: "Bridge Alpha",
       status: "checking",
+      cors: false,
     },
     {
       url: "https://api.codetabs.com/v1/proxy/?quest=https://google.com",
-      label: "CodeTabs",
+      label: "Bridge Beta",
       status: "checking",
+      cors: false,
     },
   ]);
 
@@ -104,17 +98,17 @@ const App: React.FC = () => {
     const tests = diagnostics.map(async (d) => {
       try {
         const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 5000);
+        const timeoutId = setTimeout(() => controller.abort(), 4000);
 
-        await fetch(d.url, {
-          mode: "no-cors",
+        // Real CORS check (no 'no-cors' mode)
+        const res = await fetch(d.url, {
           signal: controller.signal,
           cache: "no-cache",
         });
         clearTimeout(timeoutId);
-        return { ...d, status: "ok" as const };
+        return { ...d, status: "ok" as const, cors: true };
       } catch (e: any) {
-        return { ...d, status: "blocked" as const };
+        return { ...d, status: "blocked" as const, cors: false };
       }
     });
 
@@ -124,7 +118,7 @@ const App: React.FC = () => {
 
   useEffect(() => {
     runDiagnostics();
-    const interval = setInterval(runDiagnostics, 60000);
+    const interval = setInterval(runDiagnostics, 45000);
     return () => clearInterval(interval);
   }, []);
 
@@ -203,7 +197,7 @@ const App: React.FC = () => {
         );
       }
     } catch (err: any) {
-      setErrorMessage(err.message || "Connection error. Check diagnostics.");
+      setErrorMessage(err.message);
     } finally {
       setIsSubmitting(false);
     }
@@ -264,7 +258,7 @@ const App: React.FC = () => {
         setErrorMessage(data.detail || "Incorrect phone number or password.");
       }
     } catch (err: any) {
-      setErrorMessage(err.message || "Login failed. Connection error.");
+      setErrorMessage(err.message);
       runDiagnostics();
     } finally {
       setIsSubmitting(false);
@@ -379,9 +373,8 @@ const App: React.FC = () => {
     alert("List copied to clipboard!");
   };
 
-  // REFINED WALLED GARDEN LIST - Add device.onetel.co.za to bypass proxy issues!
   const WALLED_GARDEN =
-    "device.onetel.co.za,tmanscript.github.io,api.allorigins.win,corsproxy.io,api.codetabs.com,esm.sh,cdn.tailwindcss.com,fonts.googleapis.com,fonts.gstatic.com,sandbox.payfast.co.za";
+    "device.onetel.co.za,wifi.umoja.network,wifi-auth.umoja.network,umoja.network,tmanscript.github.io,corsproxy.io,api.codetabs.com,api.allorigins.win,esm.sh,cdn.tailwindcss.com,fonts.googleapis.com,fonts.gstatic.com,sandbox.payfast.co.za";
 
   const renderContent = () => {
     if (step === "BUY_DATA") {
@@ -450,7 +443,7 @@ const App: React.FC = () => {
             </h2>
             <div className="relative z-10 bg-black/10 backdrop-blur-md rounded-2xl p-4 border border-white/10">
               <p className="text-[10px] font-black uppercase tracking-widest mb-3 text-pink-100">
-                Connection Bridges
+                Live Diagnostics
               </p>
               <div className="grid grid-cols-1 gap-2">
                 {diagnostics.map((d) => (
@@ -462,7 +455,8 @@ const App: React.FC = () => {
                       className={`w-2 h-2 rounded-full ${d.status === "ok" ? "bg-green-400" : "bg-red-400 animate-pulse"}`}
                     />
                     <span className="truncate">
-                      {d.label}: {d.status === "ok" ? "Connected" : "Blocked"}
+                      {d.label}:{" "}
+                      {d.status === "ok" ? "Ready" : "Blocked by Router"}
                     </span>
                   </div>
                 ))}
@@ -484,7 +478,6 @@ const App: React.FC = () => {
                   value={formData.first_name}
                   onChange={handleInputChange}
                   placeholder="John"
-                  icon={<User className="w-4 h-4" />}
                   required
                 />
                 <Input
@@ -493,7 +486,6 @@ const App: React.FC = () => {
                   value={formData.last_name}
                   onChange={handleInputChange}
                   placeholder="Doe"
-                  icon={<User className="w-4 h-4" />}
                   required
                 />
               </div>
@@ -666,7 +658,7 @@ const App: React.FC = () => {
                     className={`w-2 h-2 rounded-full ${d.status === "ok" ? "bg-green-400" : "bg-red-400 animate-pulse"}`}
                   />
                   <span className="truncate">
-                    {d.label}: {d.status === "ok" ? "OK" : "Blocked"}
+                    {d.label}: {d.status === "ok" ? "Online" : "Restricted"}
                   </span>
                 </div>
               ))}
@@ -743,7 +735,7 @@ const App: React.FC = () => {
         <div className="mt-8 max-w-xl w-full bg-white border-2 border-pink-100 rounded-[2rem] p-6 shadow-xl animate-in slide-in-from-bottom-8">
           <div className="flex items-center justify-between mb-4">
             <h4 className="text-[10px] font-black text-gray-800 uppercase tracking-widest flex items-center gap-2">
-              <Info className="w-4 h-4 text-pink-500" /> Walled Garden Fix
+              <Info className="w-4 h-4 text-pink-500" /> Walled Garden Settings
             </h4>
             <button
               onClick={() => setShowHelper(false)}
@@ -753,8 +745,7 @@ const App: React.FC = () => {
             </button>
           </div>
           <p className="text-[10px] text-gray-500 mb-3 font-medium">
-            To fix connectivity errors, paste this list into your{" "}
-            <b>uamallowed</b> setting:
+            Add these to your <b>uamallowed</b> list in OpenWISP:
           </p>
           <div className="bg-gray-50 p-3 rounded-xl border border-gray-100 flex gap-2 items-center">
             <code className="text-[9px] font-mono text-gray-500 truncate flex-1 leading-none">
@@ -772,7 +763,7 @@ const App: React.FC = () => {
 
       <p className="mt-8 text-center text-gray-400 text-[10px] font-black uppercase tracking-widest flex items-center gap-2">
         <div className="w-1.5 h-1.5 bg-green-500 rounded-full"></div>
-        Onetel Network • Gateway Core v4.4
+        Onetel Network • Core v4.5
       </p>
     </div>
   );
