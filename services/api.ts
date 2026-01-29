@@ -1,59 +1,80 @@
-
-import { RegistrationPayload, LoginPayload } from '../types';
-import { API_ENDPOINT } from '../constants';
+import { RegistrationPayload, LoginPayload } from "../types";
+import { API_ENDPOINT } from "../constants";
 
 /**
- * ROBUST MULTI-PROXY ROTATION
- * These services help bypass CORS and firewall restrictions.
+ * PROXY STRATEGY
+ * 1. Try Direct (Fastest, requires Walled Garden entry)
+ * 2. Try AllOrigins (Reliable for simple POST)
+ * 3. Try CorsProxy.io (Supports more headers)
+ * 4. Try CodeTabs (Backup)
  */
 const PROXIES = [
-  'https://api.allorigins.win/raw?url=',
-  'https://corsproxy.io/?',
-  'https://api.codetabs.com/v1/proxy/?quest=',
+  "", // Direct attempt first
+  "https://api.allorigins.win/raw?url=",
+  "https://corsproxy.io/?",
+  "https://api.codetabs.com/v1/proxy/?quest=",
 ];
 
-async function fetchWithProxy(targetUrl: string, options: RequestInit): Promise<Response> {
+async function fetchWithProxy(
+  targetUrl: string,
+  options: RequestInit,
+): Promise<Response> {
   let lastError: any;
 
-  // We cycle through available proxies
   for (const proxy of PROXIES) {
     try {
-      const fullUrl = `${proxy}${encodeURIComponent(targetUrl)}`;
-      
+      const isDirect = proxy === "";
+      const fullUrl = isDirect
+        ? targetUrl
+        : `${proxy}${encodeURIComponent(targetUrl)}`;
+
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 7000); // 7s timeout per proxy
-      
-      const fetchOptions: RequestInit = {
+      const timeoutId = setTimeout(
+        () => controller.abort(),
+        isDirect ? 3000 : 7000,
+      );
+
+      const response = await fetch(fullUrl, {
         ...options,
         signal: controller.signal,
-        // We use 'cors' mode but keep headers minimal to avoid preflight issues on some proxies
-      };
+        // When using a proxy, we rely on the proxy to handle CORS for us.
+        // Direct attempt uses standard 'cors' mode.
+        mode: "cors",
+      });
 
-      const response = await fetch(fullUrl, fetchOptions);
       clearTimeout(timeoutId);
-      
-      // If the proxy itself returns a failure (like 404/502), try the next proxy
-      if (response.status >= 500) {
-        throw new Error(`Proxy error ${response.status}`);
+
+      // If we get a response (even a 400 from the API), it means the connection works.
+      // We only switch to the next proxy if we get a network failure (fetch error).
+      if (response.ok || (response.status >= 400 && response.status < 500)) {
+        return response;
       }
 
-      return response;
+      throw new Error(`Proxy returned status ${response.status}`);
     } catch (err: any) {
-      console.warn(`Bridge Failed: ${proxy}`, err.name === 'AbortError' ? 'Timeout' : err.message);
+      const isTimeout = err.name === "AbortError";
+      console.warn(
+        `Attempt Failed (${proxy || "Direct"}):`,
+        isTimeout ? "Timed out" : err.message,
+      );
       lastError = err;
-      continue; 
+      // Continue to next proxy in the list
     }
   }
-  
-  throw lastError || new Error("All connection bridges are blocked. Update your Walled Garden settings.");
+
+  throw new Error(
+    "All connection paths are blocked. Ensure 'device.onetel.co.za' and bridges are in your uamallowed list.",
+  );
 }
 
-export const registerUser = async (data: RegistrationPayload): Promise<Response> => {
+export const registerUser = async (
+  data: RegistrationPayload,
+): Promise<Response> => {
   return await fetchWithProxy(API_ENDPOINT, {
-    method: 'POST',
+    method: "POST",
     headers: {
-      'Content-Type': 'application/json',
-      'Accept': 'application/json',
+      "Content-Type": "application/json",
+      Accept: "application/json",
     },
     body: JSON.stringify(data),
   });
@@ -62,10 +83,10 @@ export const registerUser = async (data: RegistrationPayload): Promise<Response>
 export const loginUser = async (data: LoginPayload): Promise<Response> => {
   const url = `${API_ENDPOINT}token/`;
   return await fetchWithProxy(url, {
-    method: 'POST',
+    method: "POST",
     headers: {
-      'Content-Type': 'application/json',
-      'Accept': 'application/json',
+      "Content-Type": "application/json",
+      Accept: "application/json",
     },
     body: JSON.stringify(data),
   });
@@ -74,10 +95,10 @@ export const loginUser = async (data: LoginPayload): Promise<Response> => {
 export const getUsage = async (token: string): Promise<Response> => {
   const url = `${API_ENDPOINT}usage/`;
   return await fetchWithProxy(url, {
-    method: 'GET',
+    method: "GET",
     headers: {
-      'Authorization': `Bearer ${token}`,
-      'Accept': 'application/json',
+      Authorization: `Bearer ${token}`,
+      Accept: "application/json",
     },
   });
 };
@@ -85,24 +106,27 @@ export const getUsage = async (token: string): Promise<Response> => {
 export const requestOtp = async (token: string): Promise<Response> => {
   const url = `${API_ENDPOINT}phone/token/`;
   return await fetchWithProxy(url, {
-    method: 'POST',
+    method: "POST",
     headers: {
-      'Authorization': `Bearer ${token}`,
-      'Content-Type': 'application/json',
-      'Accept': 'application/json',
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+      Accept: "application/json",
     },
-    body: '',
+    body: "",
   });
 };
 
-export const verifyOtp = async (token: string, code: string): Promise<Response> => {
+export const verifyOtp = async (
+  token: string,
+  code: string,
+): Promise<Response> => {
   const url = `${API_ENDPOINT}phone/verify/`;
   return await fetchWithProxy(url, {
-    method: 'POST',
+    method: "POST",
     headers: {
-      'Authorization': `Bearer ${token}`,
-      'Content-Type': 'application/json',
-      'Accept': 'application/json',
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+      Accept: "application/json",
     },
     body: JSON.stringify({ code }),
   });
